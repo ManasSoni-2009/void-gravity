@@ -1,5 +1,6 @@
 
 import fs from "node:fs";
+import path from "node:path";
 
 export function loadAllApiKeys(currentSettingKey?: string): string[] {
   const keys: string[] = [];
@@ -13,11 +14,35 @@ export function loadAllApiKeys(currentSettingKey?: string): string[] {
   }
   addKey(currentSettingKey);
   try {
-    const keysFile = "C:\\Users\\manas\\AppData\\Roaming\\BetterGravity\\gemini\\keys.json";
+    const appData =
+      process.env.APPDATA ||
+      (process.platform === "darwin"
+        ? path.join(process.env.HOME || "", "Library", "Application Support")
+        : path.join(process.env.HOME || "", ".config"));
+    const keysDir = path.join(appData, "BetterGravity", "gemini");
+    const keysFile = path.join(keysDir, "keys.json");
     if (fs.existsSync(keysFile)) {
       const data = JSON.parse(fs.readFileSync(keysFile, "utf8"));
       if (Array.isArray(data.keys)) data.keys.forEach(addKey);
       else if (Array.isArray(data)) data.forEach(addKey);
+    }
+    if (keys.length > 0) {
+      try {
+        fs.mkdirSync(keysDir, { recursive: true });
+        fs.writeFileSync(
+          keysFile,
+          JSON.stringify(
+            {
+              description:
+                "Add your Google AI Studio Gemini API keys here. VoidGravity automatically rotates to the next fallback key whenever a key hits daily quotas or persistent rate limits.",
+              keys
+            },
+            null,
+            2
+          ),
+          "utf8"
+        );
+      } catch {}
     }
   } catch {}
   return keys;
@@ -640,7 +665,7 @@ export class GeminiProxy {
           `⚠️ **Daily Quota Limit Reached on All Configured API Keys (${allKeys.length} key${allKeys.length > 1 ? "s" : ""})**\n\n` +
           `All your configured Google AI Studio keys have exhausted their free-tier quota.\n\n` +
           `**To continue immediately:**\n` +
-          `1. **Add another API key**: Add a new key from another Google account into \`keys.json\`:\n` +
+          `1. **Add another API key**: Click the **+ Add Key** button in BetterGravity settings menu (or add to \`keys.json\`):\n` +
           `   \`C:\\Users\\manas\\AppData\\Roaming\\BetterGravity\\gemini\\keys.json\`\n` +
           `2. **Switch to Default Subscription**: Select **Gemini 3.8 Flash** in the model dropdown to continue working with Antigravity's built-in subscription (unlimited prompts, multi-million TPM, no quota limits).\n`;
         sendChatNotice(response, promptMsg, traceId);
