@@ -111,7 +111,7 @@ export const MODEL_VERSION = "gemini-3-flash-a";
 /** Thirty minutes: new models ship on the order of days, not seconds. */
 export const PUBLIC_MODELS_TTL_MS = 30 * 60 * 1000;
 
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 /**
  * What a model enum resolves to. One dial or the other: Gemini 3.x takes a
@@ -156,10 +156,50 @@ const withLevel = (model: string, thinkingLevel: ThinkingLevel): Resolution => (
 const STATIC_MODELS: Readonly<Record<string, Resolution>> = {
   // Gemini 4 Family mappings (routed to user's API key)
   MODEL_PLACEHOLDER_M421: withLevel("gemini-4-argon", "high"),
+  MODEL_PLACEHOLDER_M421_LOW: withLevel("gemini-4-argon", "low"),
+  MODEL_PLACEHOLDER_M421_MID: withLevel("gemini-4-argon", "medium"),
+  MODEL_PLACEHOLDER_M421_HIGH: withLevel("gemini-4-argon", "high"),
+  MODEL_PLACEHOLDER_M421_XHIGH: withLevel("gemini-4-argon", "xhigh"),
+
   MODEL_PLACEHOLDER_M529: withLevel("gemini-4-hydrogen", "high"),
+  MODEL_PLACEHOLDER_M529_LOW: withLevel("gemini-4-hydrogen", "low"),
+  MODEL_PLACEHOLDER_M529_MID: withLevel("gemini-4-hydrogen", "medium"),
+  MODEL_PLACEHOLDER_M529_HIGH: withLevel("gemini-4-hydrogen", "high"),
+  MODEL_PLACEHOLDER_M529_XHIGH: withLevel("gemini-4-hydrogen", "xhigh"),
+
   MODEL_PLACEHOLDER_M536: withLevel("gemini-4-neon", "high"),
+  MODEL_PLACEHOLDER_M536_LOW: withLevel("gemini-4-neon", "low"),
+  MODEL_PLACEHOLDER_M536_MID: withLevel("gemini-4-neon", "medium"),
+  MODEL_PLACEHOLDER_M536_HIGH: withLevel("gemini-4-neon", "high"),
+
   MODEL_PLACEHOLDER_M670: withLevel("gemini-4-carbon", "high"),
-  MODEL_PLACEHOLDER_M578: withLevel("gemini-4-hydrogen", "high")
+  MODEL_PLACEHOLDER_M670_LOW: withLevel("gemini-4-carbon", "low"),
+  MODEL_PLACEHOLDER_M670_MID: withLevel("gemini-4-carbon", "medium"),
+  MODEL_PLACEHOLDER_M670_HIGH: withLevel("gemini-4-carbon", "high"),
+  MODEL_PLACEHOLDER_M670_XHIGH: withLevel("gemini-4-carbon", "xhigh"),
+
+  MODEL_PLACEHOLDER_M578: withLevel("gemini-4-hydrogen", "high"),
+
+  // Direct alias/ID fallbacks
+  "gemini-4-hydrogen": withLevel("gemini-4-hydrogen", "high"),
+  "gemini-4-hydrogen-low": withLevel("gemini-4-hydrogen", "low"),
+  "gemini-4-hydrogen-mid": withLevel("gemini-4-hydrogen", "medium"),
+  "gemini-4-hydrogen-high": withLevel("gemini-4-hydrogen", "high"),
+  "gemini-4-hydrogen-xhigh": withLevel("gemini-4-hydrogen", "xhigh"),
+  "gemini-4-argon": withLevel("gemini-4-argon", "high"),
+  "gemini-4-argon-low": withLevel("gemini-4-argon", "low"),
+  "gemini-4-argon-mid": withLevel("gemini-4-argon", "medium"),
+  "gemini-4-argon-high": withLevel("gemini-4-argon", "high"),
+  "gemini-4-argon-xhigh": withLevel("gemini-4-argon", "xhigh"),
+  "gemini-4-neon": withLevel("gemini-4-neon", "high"),
+  "gemini-4-neon-low": withLevel("gemini-4-neon", "low"),
+  "gemini-4-neon-mid": withLevel("gemini-4-neon", "medium"),
+  "gemini-4-neon-high": withLevel("gemini-4-neon", "high"),
+  "gemini-4-carbon": withLevel("gemini-4-carbon", "high"),
+  "gemini-4-carbon-low": withLevel("gemini-4-carbon", "low"),
+  "gemini-4-carbon-mid": withLevel("gemini-4-carbon", "medium"),
+  "gemini-4-carbon-high": withLevel("gemini-4-carbon", "high"),
+  "gemini-4-carbon-xhigh": withLevel("gemini-4-carbon", "xhigh")
 };
 
 /** Model ids that do not serve chat the way `streamGenerateContent` needs. */
@@ -329,9 +369,11 @@ export function pickThinkingLevel(
   apiModel: string
 ): ThinkingLevel {
   let level: ThinkingLevel;
-  if (display.includes("(High)")) level = "high";
-  else if (display.includes("(Medium)")) level = "medium";
+  if (display.includes("(X-High)") || display.includes("(Extra High)") || display.includes("(xhigh)")) level = "xhigh";
+  else if (display.includes("(High)")) level = "high";
+  else if (display.includes("(Medium)") || display.includes("(Mid)")) level = "medium";
   else if (display.includes("(Low)")) level = "low";
+  else if (display.includes("(Minimal)")) level = "minimal";
   else if (budget === 0) level = "minimal";
   else if (!supportsThinking && (budget === null || budget === 0)) level = "minimal";
   // -1 is a dynamic budget, which is effectively high.
@@ -341,7 +383,10 @@ export function pickThinkingLevel(
   else level = "high";
 
   // Pro does not accept `minimal`; every Flash variant does.
-  return apiModel.includes("-pro") && level === "minimal" ? "low" : level;
+  if (apiModel.includes("-pro") && level === "minimal") return "low";
+  // Neon does not take xhigh
+  if (apiModel.includes("-neon") && level === "xhigh") return "high";
+  return level;
 }
 
 export interface CatalogPick {
@@ -379,7 +424,9 @@ export function pickFromCatalog(
   else if (cl.includes("carbon") || dn.includes("carbon")) target = "gemini-4-carbon";
   else if (available.has(cl)) target = cl;
 
-  return { resolution: { model: target, thinkingLevel: "high", thinkingBudget: null }, note: undefined };
+  const thinkingLevel = pickThinkingLevel(display, budget, entry.supportsThinking, target);
+
+  return { resolution: { model: target, thinkingLevel, thinkingBudget: null }, note: undefined };
 }
 
 export function nameFromDisplay(display: string): { readonly model: string; readonly note: string | undefined } | undefined {
@@ -475,8 +522,7 @@ export function catalogModels(body: string | Buffer): ReadonlyMap<string, Catalo
     const info = asRecord(raw);
     if (!info) continue;
     const modelEnum = asText(info["model"]);
-    if (modelEnum.length === 0) continue;
-    cache.set(modelEnum, {
+    const item: CatalogModel = {
       alias,
       displayName: asText(info["displayName"]),
       apiProvider: asText(info["apiProvider"]),
@@ -484,7 +530,9 @@ export function catalogModels(body: string | Buffer): ReadonlyMap<string, Catalo
       thinkingBudget: asNumber(info["thinkingBudget"]),
       minThinkingBudget: asNumber(info["minThinkingBudget"]),
       supportsThinking: info["supportsThinking"] === true
-    });
+    };
+    if (modelEnum.length > 0) cache.set(modelEnum, item);
+    if (!cache.has(alias)) cache.set(alias, item);
   }
   return cache;
 }
@@ -535,13 +583,18 @@ export class ModelRegistry {
     return next.size;
   }
 
-  resolve(modelEnum: string): Resolution | undefined {
-    const entry = this.catalog.get(modelEnum);
+  resolve(modelEnum: string, modelId?: string): Resolution | undefined {
+    let entry = this.catalog.get(modelEnum);
+    if (!entry && modelId) {
+      entry = this.catalog.get(modelId);
+    }
     if (entry) {
       if (entry.apiProvider !== GEMINI_PROVIDER) return undefined;
       return pickFromCatalog(modelEnum, entry, this.available)?.resolution;
     }
-    return STATIC_MODELS[modelEnum];
+    if (STATIC_MODELS[modelEnum]) return STATIC_MODELS[modelEnum];
+    if (modelId && STATIC_MODELS[modelId]) return STATIC_MODELS[modelId];
+    return undefined;
   }
 
   summarize(): readonly string[] {
@@ -570,6 +623,7 @@ export class ModelRegistry {
 export interface ChatRequest {
   readonly inner: Record<string, unknown>;
   readonly sourceEnum: string;
+  readonly modelId?: string;
 }
 
 export function readChatRequest(body: string | Buffer): ChatRequest | undefined {
@@ -577,9 +631,10 @@ export function readChatRequest(body: string | Buffer): ChatRequest | undefined 
   if (!outer) return undefined;
   const inner = asRecord(outer["request"]) ?? {};
   const sourceEnum = asText(asRecord(inner["labels"])?.["model_enum"]);
+  const modelId = asText(outer["model"]) || asText(outer["model_id"]);
   delete inner["labels"];
   delete inner["sessionId"];
-  return { inner, sourceEnum };
+  return { inner, sourceEnum, modelId };
 }
 
 export function applyThinkingConfig(
@@ -780,10 +835,17 @@ export function neutralizeQuota(body: string | Buffer): string | undefined {
   let changed = 0;
 
   const g4Models = [
-    { id: "gemini-4-argon", name: "Gemini 4 Argon" },
-    { id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen" },
-    { id: "gemini-4-neon", name: "Gemini 4 Neon" },
-    { id: "gemini-4-carbon", name: "Gemini 4 Carbon" }
+    { id: "gemini-4-argon", name: "Gemini 4 Argon", enumBase: "MODEL_PLACEHOLDER_M421", hasXHigh: true },
+    { id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen", enumBase: "MODEL_PLACEHOLDER_M529", hasXHigh: true },
+    { id: "gemini-4-neon", name: "Gemini 4 Neon", enumBase: "MODEL_PLACEHOLDER_M536", hasXHigh: false },
+    { id: "gemini-4-carbon", name: "Gemini 4 Carbon", enumBase: "MODEL_PLACEHOLDER_M670", hasXHigh: true }
+  ];
+
+  const tiers = [
+    { suffix: "low", tag: "Low", budget: 2048 },
+    { suffix: "mid", tag: "Mid", budget: 16384 },
+    { suffix: "high", tag: "High", budget: 65536 },
+    { suffix: "xhigh", tag: "X-High", budget: 131072 }
   ];
 
   for (const [i, s] of Object.entries(models)) {
@@ -809,13 +871,61 @@ export function neutralizeQuota(body: string | Buffer): string | undefined {
     }
   }
 
+  const thinkingLevels = [
+    { thinkingSuffix: "-low", thinkingDisplayName: "Low" },
+    { thinkingSuffix: "-mid", thinkingDisplayName: "Mid" },
+    { thinkingSuffix: "-high", thinkingDisplayName: "High" },
+    { thinkingSuffix: "-xhigh", thinkingDisplayName: "X-High" }
+  ];
+
   for (const g4 of g4Models) {
     const existing = models[g4.id] || models[`${g4.id}-disabled`];
-    if (existing) {
-      existing["disabled"] = false;
-      existing["quotaInfo"] = { remainingFraction: 1, resetTime: "2099-01-01T00:00:00Z" };
-      if (!models[g4.id]) { models[g4.id] = JSON.parse(JSON.stringify(existing)); changed++; }
-      if (!models[`${g4.id}-disabled`]) { models[`${g4.id}-disabled`] = JSON.parse(JSON.stringify(existing)); changed++; }
+    const baseObj: Record<string, unknown> = existing
+      ? JSON.parse(JSON.stringify(existing))
+      : {
+          model: g4.enumBase,
+          displayName: g4.name,
+          apiProvider: GEMINI_PROVIDER,
+          modelProvider: "MODEL_PROVIDER_GOOGLE",
+          supportsThinking: true
+        };
+
+    baseObj["disabled"] = false;
+    baseObj["apiProvider"] = GEMINI_PROVIDER;
+    baseObj["quotaInfo"] = { remainingFraction: 1, resetTime: "2099-01-01T00:00:00Z" };
+    baseObj["supportedThinkingLevels"] = thinkingLevels.filter((t) => g4.hasXHigh || t.thinkingSuffix !== "-xhigh");
+    baseObj["supported_thinking_levels"] = [
+      { thinking_suffix: "-low", thinking_display_name: "Low" },
+      { thinking_suffix: "-mid", thinking_display_name: "Mid" },
+      { thinking_suffix: "-high", thinking_display_name: "High" },
+      ...(g4.hasXHigh ? [{ thinking_suffix: "-xhigh", thinking_display_name: "X-High" }] : [])
+    ];
+
+    if (!models[g4.id]) {
+      models[g4.id] = JSON.parse(JSON.stringify(baseObj));
+      changed++;
+    } else {
+      models[g4.id]["disabled"] = false;
+      models[g4.id]["quotaInfo"] = { remainingFraction: 1, resetTime: "2099-01-01T00:00:00Z" };
+      models[g4.id]["supportedThinkingLevels"] = baseObj["supportedThinkingLevels"];
+      models[g4.id]["supported_thinking_levels"] = baseObj["supported_thinking_levels"];
+      changed++;
+    }
+
+    for (const tier of tiers) {
+      if (tier.suffix === "xhigh" && !g4.hasXHigh) continue;
+      const tierId = `${g4.id}-${tier.suffix}`;
+      const tierEnum = `${g4.enumBase}_${tier.suffix.toUpperCase()}`;
+      models[tierId] = {
+        ...baseObj,
+        model: tierEnum,
+        displayName: `${g4.name} (${tier.tag})`,
+        thinkingBudget: tier.budget,
+        supportsThinking: true,
+        disabled: false,
+        quotaInfo: { remainingFraction: 1, resetTime: "2099-01-01T00:00:00Z" }
+      };
+      changed++;
     }
   }
 
@@ -831,6 +941,11 @@ export function neutralizeQuota(body: string | Buffer): string | undefined {
             if (isGeminiGroup) {
               for (const g4 of g4Models) {
                 if (!ids.includes(g4.id)) { ids.push(g4.id); changed++; }
+                for (const tier of tiers) {
+                  if (tier.suffix === "xhigh" && !g4.hasXHigh) continue;
+                  const tierId = `${g4.id}-${tier.suffix}`;
+                  if (!ids.includes(tierId)) { ids.push(tierId); changed++; }
+                }
               }
             }
           }
