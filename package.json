@@ -1,9 +1,9 @@
 {
-  "name": "bettergravity",
-  "version": "3.0.0",
+  "name": "void-gravity",
+  "version": "3.1.0",
   "private": true,
-  "description": "An open community modification platform for Google Antigravity.",
-  "homepage": "https://github.com/YashjitPal/BetterGravity",
+  "description": "Next-Gen Google Antigravity Enhancement Suite with Gemini 4 BYOK, Multi-Key Fallback Pool, Zero-Latency Passthrough, and TPM Burst Stabilization.",
+  "homepage": "https://github.com/ManasSoni-2009/void-gravity",
   "license": "MIT",
   "packageManager": "pnpm@10.27.0",
   "engines": {
