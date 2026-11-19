@@ -216,6 +216,10 @@ describe("how much thinking to ask for", () => {
     expect(pickThinkingLevel("Gemini 3.1 Pro (High)", 0, true, "gemini-3.1-pro-preview")).toBe("high");
     expect(pickThinkingLevel("Gemini 3.5 Flash (Medium)", null, true, "gemini-3.5-flash")).toBe("medium");
     expect(pickThinkingLevel("Gemini 3.5 Flash (Low)", 100_000, true, "gemini-3.5-flash")).toBe("low");
+    expect(pickThinkingLevel("Gemini 4 Hydrogen (X-High)", null, true, "gemini-4-hydrogen")).toBe("xhigh");
+    expect(pickThinkingLevel("Gemini 4 Hydrogen (Mid)", null, true, "gemini-4-hydrogen")).toBe("medium");
+    expect(pickThinkingLevel("Gemini 4 Hydrogen (Low)", null, true, "gemini-4-hydrogen")).toBe("low");
+    expect(pickThinkingLevel("Gemini 4 Neon (X-High)", null, true, "gemini-4-neon")).toBe("high");
   });
 
   it("reads the budget when the label says nothing", () => {
@@ -490,7 +494,8 @@ describe("the quota the picker draws", () => {
           "gemini-3-flash-agent": { apiProvider: GEMINI, quotaInfo: { remainingFraction: 0 } },
           // No quotaInfo at all, so one has to be put there.
           "gemini-pro-agent": { apiProvider: GEMINI },
-          "claude-sonnet": { apiProvider: "API_PROVIDER_VERTEX_ANTHROPIC", quotaInfo: { remainingFraction: 0.25 } }
+          "claude-sonnet": { apiProvider: "API_PROVIDER_VERTEX_ANTHROPIC", quotaInfo: { remainingFraction: 0.25 } },
+          "gemini-4-hydrogen-disabled": { displayName: "Gemini 4 Hydrogen", disabled: true }
         }
       })
     );
@@ -501,6 +506,14 @@ describe("the quota the picker draws", () => {
     expect(models?.["gemini-pro-agent"]).toEqual({ apiProvider: GEMINI, quotaInfo: { remainingFraction: 1 } });
     // The subscription's own numbers are accurate, so they stand.
     expect(models?.["claude-sonnet"]?.["quotaInfo"]).toEqual({ remainingFraction: 0.25 });
+    // Gemini 4 Hydrogen and its thinking modes are present and enabled
+    expect(models?.["gemini-4-hydrogen"]).toBeDefined();
+    expect(models?.["gemini-4-hydrogen"]?.["disabled"]).toBe(false);
+    expect(models?.["gemini-4-hydrogen-low"]).toBeDefined();
+    expect(models?.["gemini-4-hydrogen-low"]?.["displayName"]).toBe("Gemini 4 Hydrogen (Low)");
+    expect(models?.["gemini-4-hydrogen-mid"]?.["displayName"]).toBe("Gemini 4 Hydrogen (Mid)");
+    expect(models?.["gemini-4-hydrogen-high"]?.["displayName"]).toBe("Gemini 4 Hydrogen (High)");
+    expect(models?.["gemini-4-hydrogen-xhigh"]?.["displayName"]).toBe("Gemini 4 Hydrogen (X-High)");
   });
 
   it("says nothing when there was nothing to change, so the bytes go on untouched", () => {
