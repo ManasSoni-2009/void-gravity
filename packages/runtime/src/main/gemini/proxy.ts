@@ -528,7 +528,7 @@ export class GeminiProxy {
     settings: ProxySettings
   ): Promise<void> {
     const read = readChatRequest(body);
-    const resolution = read ? this.deps.registry.resolve(read.sourceEnum) : undefined;
+    const resolution = read ? this.deps.registry.resolve(read.sourceEnum, read.modelId) : undefined;
     if (!read || !resolution) {
       await this.passthrough(request, response, body);
       return;
