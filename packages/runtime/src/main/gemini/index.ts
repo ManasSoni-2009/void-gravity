@@ -32,8 +32,8 @@ import {
   installTrust,
   loadOrMint,
   readTrustRecord,
-  recordTrust,
   removeTrust,
+  writeTrustRecord,
   type CertificateFiles,
   type CertificateMaterial,
   type TrustState
@@ -252,7 +252,7 @@ export class GeminiTranslator {
     }
 
     const trusted = state === "trusted";
-    if (trusted) recordTrust(this.files, material.thumbprint);
+    if (trusted) writeTrustRecord(this.files, material.thumbprint);
     if (trusted !== this.trusted) {
       this.trusted = trusted;
       logger.info(
