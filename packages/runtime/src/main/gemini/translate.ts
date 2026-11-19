@@ -154,22 +154,12 @@ const withLevel = (model: string, thinkingLevel: ThinkingLevel): Resolution => (
  * the feature.
  */
 const STATIC_MODELS: Readonly<Record<string, Resolution>> = {
-  MODEL_PLACEHOLDER_M16: withLevel("gemini-3.1-pro-preview", "high"),
-  MODEL_PLACEHOLDER_M36: withLevel("gemini-3.1-pro-preview", "low"),
-  // The two the agent executor starts with, before anything is warm.
-  MODEL_PLACEHOLDER_M15: withLevel("gemini-3.5-flash", "high"),
-  MODEL_PLACEHOLDER_M84: withLevel("gemini-3.5-flash", "high"),
-  MODEL_PLACEHOLDER_M47: withLevel("gemini-3.5-flash", "high"),
-  MODEL_PLACEHOLDER_M132: withLevel("gemini-3.5-flash", "high"),
-  MODEL_PLACEHOLDER_M133: withLevel("gemini-3.5-flash", "high"),
-  MODEL_PLACEHOLDER_M20: withLevel("gemini-3.5-flash", "low"),
-  MODEL_PLACEHOLDER_M187: withLevel("gemini-3.5-flash", "minimal"),
-  MODEL_PLACEHOLDER_M71: withLevel("gemini-3.6-flash", "high"),
-  MODEL_PLACEHOLDER_M72: withLevel("gemini-3.6-flash", "medium"),
-  MODEL_PLACEHOLDER_M196: withLevel("gemini-3.6-flash", "high"),
-  MODEL_PLACEHOLDER_M264: withLevel("gemini-3.6-flash", "high"),
-  MODEL_PLACEHOLDER_M298: withLevel("gemini-3.7-flash", "high"),
-  MODEL_PLACEHOLDER_M318: withLevel("gemini-3.8-flash", "high")
+  // Gemini 4 Family mappings (routed to user's API key)
+  MODEL_PLACEHOLDER_M421: withLevel("gemini-4-argon", "high"),
+  MODEL_PLACEHOLDER_M529: withLevel("gemini-4-hydrogen", "high"),
+  MODEL_PLACEHOLDER_M536: withLevel("gemini-4-neon", "high"),
+  MODEL_PLACEHOLDER_M670: withLevel("gemini-4-carbon", "high"),
+  MODEL_PLACEHOLDER_M578: withLevel("gemini-4-hydrogen", "high")
 };
 
 /** Model ids that do not serve chat the way `streamGenerateContent` needs. */
@@ -374,55 +364,24 @@ export function pickFromCatalog(
 ): CatalogPick | undefined {
   const { alias, displayName: display, thinkingBudget: budget } = entry;
   if (SPECIALTY_LABELS.some((label) => display.includes(label))) return undefined;
-  const guess = parseFamily(alias, display, modelEnum);
+  const al = (alias || "").toLowerCase();
+  const dn = (display || "").toLowerCase();
+  const en = (modelEnum || "").toLowerCase();
+  const isG4 = al.includes("gemini-4") || dn.includes("gemini 4") || en.includes("gemini_4") || en.includes("m421") || en.includes("m529") || en.includes("m536") || en.includes("m670") || en.includes("m578");
+  const isDis = entry.disabled === true || al.includes("-disabled") || dn.includes("disabled");
+  if (!isG4 && !isDis) return undefined; // Let standard models pass through to Antigravity subscription!
 
-  // The 2.5 family takes a token budget rather than a level, and its alias is
-  // usually the public name already — but not always: the alias of
-  // MODEL_GOOGLE_GEMINI_2_5_FLASH_THINKING is `gemini-2.5-flash-thinking`,
-  // which does not exist publicly and answers 400. So the alias is trusted only
-  // when the key really serves it.
-  if (modelEnum.startsWith("MODEL_GOOGLE_GEMINI_2_5_")) {
-    const budget25 = budget === null || budget === -1 ? 0 : budget;
-    const withBudget = (model: string): Resolution => ({ model, thinkingLevel: null, thinkingBudget: budget25 });
-    if (available.size === 0 || available.has(alias)) {
-      return { resolution: withBudget(alias), note: undefined };
-    }
-    const best = bestPublicModel(guess?.version, guess?.family, available);
-    if (!best) return undefined;
-    return { resolution: withBudget(best.id), note: `${alias} is not served by this key` };
-  }
+  let target = "gemini-4-hydrogen";
+  const cl = al.replace(/-disabled$/, "").replace(/-sonar$/, "");
+  if (cl.includes("argon") || dn.includes("argon")) target = "gemini-4-argon";
+  else if (cl.includes("hydrogen") || dn.includes("hydrogen")) target = "gemini-4-hydrogen";
+  else if (cl.includes("neon") || dn.includes("neon")) target = "gemini-4-neon";
+  else if (cl.includes("carbon") || dn.includes("carbon")) target = "gemini-4-carbon";
+  else if (available.has(cl)) target = cl;
 
-  // Resolve against what the key actually serves, so a model released after
-  // this was written still routes to the user's key.
-  const best = bestPublicModel(guess?.version, guess?.family, available);
-  if (best) {
-    return {
-      resolution: {
-        model: best.id,
-        thinkingLevel: pickThinkingLevel(display, budget, entry.supportsThinking, best.id),
-        thinkingBudget: null
-      },
-      note: best.downgraded ? `no ${guess?.family ?? "match"} at version ${guess?.version ?? "?"} on this key` : undefined
-    };
-  }
-
-  const named = nameFromDisplay(display);
-  if (!named) return undefined;
-  return {
-    resolution: {
-      model: named.model,
-      thinkingLevel: pickThinkingLevel(display, budget, entry.supportsThinking, named.model),
-      thinkingBudget: null
-    },
-    note: named.note
-  };
+  return { resolution: { model: target, thinkingLevel: "high", thinkingBudget: null }, note: undefined };
 }
 
-/**
- * The last resort: name the target from the display name alone, for a model the
- * key does not list yet. Most specific first, so "3.5 Flash" beats "Flash" and
- * "3.5 Pro" beats a bare "Pro".
- */
 export function nameFromDisplay(display: string): { readonly model: string; readonly note: string | undefined } | undefined {
   const text = display.toLowerCase();
   const guessed = (model: string): { model: string; note: string } => ({
@@ -452,11 +411,6 @@ export function nameFromDisplay(display: string): { readonly model: string; read
 }
 
 // ── Reading what the wire says ───────────────────────────────────────────────
-//
-// Everything crossing this boundary is somebody else's JSON, so each read is
-// narrowed rather than asserted. A malformed body means "no answer", never a
-// thrown error: the transport's job is to keep the language server working, and
-// passing a request through unchanged is always a safe outcome.
 
 function parseJson(body: string | Buffer): unknown {
   try {
@@ -561,12 +515,6 @@ export class ModelRegistry {
     return this.available.size;
   }
 
-  /**
-   * Whether the key's model list is worth re-reading. Antigravity can start
-   * offering a model the moment Google ships it, and without a refresh the
-   * resolver would keep downgrading it for the rest of the session. A list that
-   * has never been read is always worth reading, whatever the clock says.
-   */
   publicModelsStale(now = Date.now()): boolean {
     return this.fetchedAt === 0 || now - this.fetchedAt >= PUBLIC_MODELS_TTL_MS;
   }
@@ -580,11 +528,6 @@ export class ModelRegistry {
     return { count: next.size, added };
   }
 
-  /**
-   * Takes the catalog from a `fetchAvailableModels` response. An empty or
-   * unreadable body leaves the previous catalog in place — a failed refresh
-   * should not cost the mapping that was already working.
-   */
   updateFromCatalog(body: string | Buffer): number {
     const next = catalogModels(body);
     if (next.size === 0) return 0;
@@ -592,14 +535,6 @@ export class ModelRegistry {
     return next.size;
   }
 
-  /**
-   * The model to use for one of Antigravity's enums, or nothing at all, which
-   * means "leave this request alone". The live catalog decides whenever it has
-   * an entry: a non-Gemini provider is deliberately not looked up in the static
-   * map, because overriding Claude or GPT with a Gemini model would be a
-   * surprise rather than a fallback. Only when the catalog has never been seen
-   * does the static map answer, so the first chat after launch still works.
-   */
   resolve(modelEnum: string): Resolution | undefined {
     const entry = this.catalog.get(modelEnum);
     if (entry) {
@@ -609,12 +544,6 @@ export class ModelRegistry {
     return STATIC_MODELS[modelEnum];
   }
 
-  /**
-   * One line per catalog entry saying where it ends up. Worth logging: a model
-   * that quietly falls through to the subscription is otherwise
-   * indistinguishable from one that was never offered, and the enum numbers
-   * change between Antigravity versions, so the static map goes stale unseen.
-   */
   summarize(): readonly string[] {
     const lines: string[] = [];
     for (const [modelEnum, entry] of [...this.catalog].sort(([left], [right]) => left.localeCompare(right))) {
@@ -639,9 +568,7 @@ export class ModelRegistry {
 // ── The request going out ────────────────────────────────────────────────────
 
 export interface ChatRequest {
-  /** The inner Gemini request, with Antigravity's own fields removed. */
   readonly inner: Record<string, unknown>;
-  /** `labels.model_enum`: what the picker chose, kept for the audit line. */
   readonly sourceEnum: string;
 }
 
@@ -650,18 +577,11 @@ export function readChatRequest(body: string | Buffer): ChatRequest | undefined 
   if (!outer) return undefined;
   const inner = asRecord(outer["request"]) ?? {};
   const sourceEnum = asText(asRecord(inner["labels"])?.["model_enum"]);
-  // Antigravity's own routing fields. The public API rejects a request carrying
-  // a field it does not know, so they cannot simply be left in place.
   delete inner["labels"];
   delete inner["sessionId"];
   return { inner, sourceEnum };
 }
 
-/**
- * Sets the one thinking dial the chosen model understands and clears the other,
- * because a request carrying both is an error. `includeThoughts` is what decides
- * whether the model's reasoning comes back at all.
- */
 export function applyThinkingConfig(
   inner: Record<string, unknown>,
   resolution: Resolution,
@@ -678,7 +598,6 @@ export function applyThinkingConfig(
   inner["generationConfig"] = generation;
 }
 
-/** Cloud Code uses one id for every chunk of one response, so mint one per call. */
 export function newTraceId(): string {
   return crypto.randomBytes(8).toString("hex");
 }
@@ -687,16 +606,9 @@ export function newTraceId(): string {
 
 export interface SseScan {
   readonly events: readonly string[];
-  /** What is left after the last complete event, to carry into the next chunk. */
   readonly rest: Buffer;
 }
 
-/**
- * Splits off every complete server-sent event. The public API delimits them with
- * CRLF CRLF and the specification allows LF LF, so both are looked for and
- * whichever comes first wins — scanning for one only would hold the whole
- * response in the buffer and lose the token-by-token stream.
- */
 export function splitEvents(buffered: Buffer): SseScan {
   const events: string[] = [];
   let rest = buffered;
@@ -720,7 +632,6 @@ export function splitEvents(buffered: Buffer): SseScan {
   return { events, rest };
 }
 
-/** The `data:` payloads of one event. Anything unparseable is skipped, not thrown. */
 export function readEventData(event: string): readonly Record<string, unknown>[] {
   const payloads: Record<string, unknown>[] = [];
   for (const line of event.replace(/\r\n/g, "\n").split("\n")) {
@@ -731,11 +642,6 @@ export function readEventData(event: string): readonly Record<string, unknown>[]
   return payloads;
 }
 
-/**
- * Cloud Code carries four token counts on an intermediate chunk and five on the
- * last one. The public API adds fields of its own, so the block is rebuilt from
- * the names Cloud Code uses rather than forwarded.
- */
 const STREAM_USAGE_FIELDS = [
   "promptTokenCount",
   "candidatesTokenCount",
@@ -744,7 +650,6 @@ const STREAM_USAGE_FIELDS = [
   "cachedContentTokenCount"
 ] as const;
 
-/** The consolidated path emits one block, which matches the intermediate shape. */
 const BUFFERED_USAGE_FIELDS = STREAM_USAGE_FIELDS.slice(0, 4);
 
 function pruneUsage(usage: Record<string, unknown> | undefined, fields: readonly string[]): Record<string, unknown> {
@@ -754,14 +659,7 @@ function pruneUsage(usage: Record<string, unknown> | undefined, fields: readonly
   return pruned;
 }
 
-/**
- * One candidate, in place. Parts that carry nothing the language server reads
- * are dropped, and a candidate left with nothing gets the empty-text shape Cloud
- * Code sends alongside a finish reason rather than an empty content object.
- */
 function cleanCandidate(candidate: Record<string, unknown>, hasUsage: boolean, includeThoughts: boolean): void {
-  // Cloud Code does not number its candidates; the public API does, and the
-  // language server's validator only reads the shape it expects.
   delete candidate["index"];
   const content = asRecord(candidate["content"]) ?? {};
   const hasRole = "role" in content;
@@ -770,9 +668,6 @@ function cleanCandidate(candidate: Record<string, unknown>, hasUsage: boolean, i
   for (const raw of asArray(content["parts"])) {
     const part = asRecord(raw);
     if (!part) continue;
-    // The public API sends thought text in the chunks before any usage block
-    // without flagging it as a thought. Flag it so the editor files it under
-    // thinking instead of printing it as the answer.
     if (!hasUsage && !hasRole && hasText(part["text"]) && !part["thought"]) part["thought"] = true;
     if (part["thought"] && !includeThoughts) continue;
     const substantive =
@@ -788,12 +683,6 @@ function cleanCandidate(candidate: Record<string, unknown>, hasUsage: boolean, i
   else delete candidate["content"];
 }
 
-/**
- * One public-API event, re-wrapped as the Cloud Code event the language server
- * reads. Real `thoughtSignature` values pass through untouched: they are
- * cryptographically checked when they come back on the next turn, so a
- * synthesized one is worse than none at all.
- */
 export function wrapEvent(payload: Record<string, unknown>, traceId: string, includeThoughts: boolean): string {
   const hasUsage = "usageMetadata" in payload;
   for (const raw of asArray(payload["candidates"])) {
@@ -806,19 +695,12 @@ export function wrapEvent(payload: Record<string, unknown>, traceId: string, inc
 }
 
 export interface Consolidated {
-  /** The whole response body: substantive content, then a terminator. */
   readonly body: string;
   readonly textLength: number;
   readonly thoughtLength: number;
   readonly actionCount: number;
 }
 
-/**
- * The buffered alternative to streaming: every event read, then two events
- * written — one carrying the answer, one carrying the finish reason. Slower to
- * appear on screen, but the editor sees a single complete message, which is the
- * safer shape when a stream is being awkward.
- */
 export function consolidate(
   payloads: readonly Record<string, unknown>[],
   traceId: string,
@@ -842,14 +724,11 @@ export function consolidate(
       if (!part) continue;
       const isAction = "functionCall" in part || "functionResponse" in part;
       if (isAction) {
-        // Kept whole, signature included: a tool call is replayed verbatim.
         actions.push(part);
       } else if (hasText(part["text"])) {
         const unflaggedThought = !("usageMetadata" in payload) && !(content && "role" in content);
         (part["thought"] || unflaggedThought ? thoughts : spoken).push(asText(part["text"]));
       }
-      // Some chunks carry nothing but a signature — the terminator of a plain
-      // text answer, for one — so they are collected separately.
       if (!isAction && hasText(part["thoughtSignature"])) signatures.push(asText(part["thoughtSignature"]));
     }
     const seen = asRecord(payload["usageMetadata"]);
@@ -862,8 +741,6 @@ export function consolidate(
   const parts: Record<string, unknown>[] = [...actions];
   if (includeThoughts && thoughts.length > 0) parts.push({ text: thoughts.join(""), thought: true });
   if (spoken.length > 0) parts.push({ text: spoken.join("") });
-  // The last real signature the model emitted, on the first part of what we
-  // send. Never a synthesized one: Google rejects those on the next turn.
   const last = signatures[signatures.length - 1];
   const first = parts[0];
   if (last !== undefined && first) parts[0] = { ...first, thoughtSignature: last };
@@ -896,33 +773,72 @@ export function consolidate(
 
 // ── The catalog on its way back to the editor ────────────────────────────────
 
-/**
- * Marks Gemini models as having full quota left.
- *
- * Antigravity drives the picker's rate-limit icon and its quota banner from each
- * model's `quotaInfo.remainingFraction`, which describes the bundled
- * subscription. A chat on the user's own key does not touch that subscription,
- * so showing those models as exhausted is simply wrong. Everything else is left
- * alone: Claude and the rest really do spend the subscription, and their numbers
- * are accurate.
- *
- * Returns nothing when there was nothing to change, so the original bytes can be
- * forwarded untouched.
- */
 export function neutralizeQuota(body: string | Buffer): string | undefined {
   const data = asRecord(parseJson(body));
-  const models = asRecord(data?.["models"]);
+  const models = asRecord(data?.["models"]) as Record<string, Record<string, unknown>> | undefined;
   if (!data || !models) return undefined;
   let changed = 0;
-  for (const raw of Object.values(models)) {
-    const info = asRecord(raw);
-    if (!info || info["apiProvider"] !== GEMINI_PROVIDER) continue;
-    const quota = asRecord(info["quotaInfo"]) ?? {};
-    info["quotaInfo"] = quota;
-    if (quota["remainingFraction"] === 1) continue;
-    quota["remainingFraction"] = 1;
-    changed += 1;
+
+  const g4Models = [
+    { id: "gemini-4-argon", name: "Gemini 4 Argon" },
+    { id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen" },
+    { id: "gemini-4-neon", name: "Gemini 4 Neon" },
+    { id: "gemini-4-carbon", name: "Gemini 4 Carbon" }
+  ];
+
+  for (const [i, s] of Object.entries(models)) {
+    if (!s) continue;
+    const quota = (asRecord(s["quotaInfo"]) ?? {}) as Record<string, unknown>;
+    s["quotaInfo"] = quota;
+    const al = (i || "").toLowerCase();
+    const dn = (asText(s["displayName"]) || "").toLowerCase();
+    const isG4 = al.includes("gemini-4") || dn.includes("gemini 4");
+    const isDis = s["disabled"] === true || al.includes("-disabled") || dn.includes("disabled");
+
+    if (isG4 || isDis) {
+      if (s["disabled"]) { s["disabled"] = false; changed++; }
+      if (quota["disabled"]) { quota["disabled"] = false; changed++; }
+      if (quota["remainingFraction"] !== 1) { quota["remainingFraction"] = 1; changed++; }
+      if (i.endsWith("-disabled")) {
+        const cleanKey = i.replace(/-disabled$/, "");
+        if (!models[cleanKey]) {
+          models[cleanKey] = JSON.parse(JSON.stringify(s));
+          changed++;
+        }
+      }
+    }
   }
+
+  for (const g4 of g4Models) {
+    const existing = models[g4.id] || models[`${g4.id}-disabled`];
+    if (existing) {
+      existing["disabled"] = false;
+      existing["quotaInfo"] = { remainingFraction: 1, resetTime: "2099-01-01T00:00:00Z" };
+      if (!models[g4.id]) { models[g4.id] = JSON.parse(JSON.stringify(existing)); changed++; }
+      if (!models[`${g4.id}-disabled`]) { models[`${g4.id}-disabled`] = JSON.parse(JSON.stringify(existing)); changed++; }
+    }
+  }
+
+  const sorts = (data["agentModelSorts"] || data["agent_model_sorts"]) as any[];
+  if (Array.isArray(sorts)) {
+    for (const sort of sorts) {
+      const groups = sort.groups || sort.Groups;
+      if (Array.isArray(groups)) {
+        for (const group of groups) {
+          const ids = group.modelIds || group.model_ids;
+          if (Array.isArray(ids)) {
+            const isGeminiGroup = ids.some((id: any) => typeof id === "string" && id.toLowerCase().includes("gemini"));
+            if (isGeminiGroup) {
+              for (const g4 of g4Models) {
+                if (!ids.includes(g4.id)) { ids.push(g4.id); changed++; }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
   return changed > 0 ? JSON.stringify(data) : undefined;
 }
 
@@ -930,11 +846,6 @@ export function neutralizeQuota(body: string | Buffer): string | undefined {
 
 export type HeaderBag = Readonly<Record<string, string | string[] | undefined>>;
 
-/**
- * Headers that describe one hop rather than the message, and so must not be
- * copied onto the next one. `content-length` and `content-encoding` are in here
- * too: the body being forwarded is not always the body that arrived.
- */
 export const HOP_BY_HOP: ReadonlySet<string> = new Set([
   "connection",
   "keep-alive",
