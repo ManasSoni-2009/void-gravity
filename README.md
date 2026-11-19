@@ -1,34 +1,61 @@
 <div align="center">
 
-<img src="docs/images/logo.png" alt="BetterGravity Logo" width="130">
+<img src="docs/images/logo.png" alt="VoidGravity Logo" width="130">
 
-# BetterGravity
+# VoidGravity
 
-**The open community modification platform for [Google Antigravity](https://antigravity.google).**
+**The next-generation enhancement suite for [Google Antigravity](https://antigravity.google).**
 
-Drop in a `.css` file and the interface restyles instantly. Write a plugin in plain JavaScript with no build step. Experience a revamped UI, animated desktop companions, in-app browser with autonomous computer use, personal Gemini API keys, and Discord Rich Presence.
+*A performance-focused fork of BetterGravity featuring Gemini 4 BYOK, multi-key fallback pools, zero-latency subscription passthrough, and TPM burst stabilization.*
 
-[![Checks](https://github.com/YashjitPal/BetterGravity/actions/workflows/ci.yml/badge.svg)](https://github.com/YashjitPal/BetterGravity/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Antigravity 2.x](https://img.shields.io/badge/Antigravity-2.x-FFC799)](https://antigravity.google)
 [![Platform: Windows | macOS | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4)](docs/installation.md)
 
-[Install](docs/installation.md) · [Make a theme](docs/themes.md) ·
-[Make a plugin](docs/plugins.md) · [How it works](docs/architecture.md) ·
-[Community catalog](community/catalog.json)
+[Install](docs/installation.md) · [Gemini 4 & BYOK Guide](docs/gemini-key.md) · [Make a theme](docs/themes.md) ·
+[Make a plugin](docs/plugins.md) · [How it works](docs/architecture.md)
 
 <br><br>
-
-<img src="docs/images/home.png" alt="The BetterGravity interface inside Google Antigravity" width="800">
 
 </div>
 
 ---
 
-> [!IMPORTANT]
-> **Compatibility Notice**: BetterGravity is designed specifically for the standalone **Google Antigravity 2.0 desktop application** (`Antigravity.exe` / `Antigravity.app`). It does **not** currently support the separate VS Code-based **Antigravity IDE** (`Antigravity IDE.exe`). Dedicated Antigravity IDE support is planned for a future release.
+## ⚡ What VoidGravity adds to BetterGravity
 
-## What BetterGravity unlocks
+VoidGravity supercharges Google Antigravity with production-grade agent reliability and next-gen model access:
+
+### 🌟 1. Native Gemini 4 BYOK (Bring Your Own Key)
+Unlock Google's latest **Gemini 4** model lineup directly inside the Antigravity model selection menu:
+- **`gemini-4-argon`** — Google's top-tier ultra-reasoning model.
+- **`gemini-4-hydrogen`** — High-speed reasoning with extensive context fidelity.
+- **`gemini-4-neon`** — Lightweight, ultra-fast Gemini 4 reasoning.
+- **`gemini-4-carbon`** — Balanced code and analytical generation.
+
+These models are unblocked, catalog-injected, and routed dynamically through your personal Google AI Studio API key.
+
+### 🚀 2. Zero-Latency Subscription Passthrough
+Unlike typical proxies that intercept every request, VoidGravity uses **Selective Passthrough Routing**:
+- Built-in subscription models (**Gemini 3.8 Flash**, **Gemini 3.5 Flash Lite**, **Gemini 2.5 Pro**, **Claude Sonnet 4.6**) pass straight to Google's backend without proxy translation or latency overhead.
+- Your personal API key quota is conserved solely for models you explicitly route (e.g. Gemini 4).
+
+### 🔄 3. Multi-Key Fallback Pool (`keys.json`)
+Never get blocked by daily rate limits again. Configure multiple Google AI Studio API keys across multiple accounts:
+- Add keys in `%APPDATA%\BetterGravity\gemini\keys.json` or comma-separate them in plugin settings.
+- When an active key hits its **daily quota limit** (`requests_per_day` / `RESOURCE_EXHAUSTED`), VoidGravity automatically switches to the next fallback key and leaves a helpful note directly in chat:
+  > `> ℹ️ Switched from Key #1 to fallback Key #2 (daily quota limit reached on Key #1)`
+
+### 🛡️ 4. TPM Burst Rate-Limit Stabilization (No Context Loss!)
+During fast tool execution loops, agents can easily exceed per-minute token burst limits (e.g. 250k TPM on free tier).
+- **The Problem:** Switching API keys mid-turn causes severe context fragmentation, lost tool results, and hallucinated responses.
+- **The VoidGravity Solution:** VoidGravity intelligently parses `retryDelay` (~15–25s) from Google's response, keeps the connection alive, and **waits out the cooldown on the exact same key**. Your conversation context, memory, and active tool calls remain 100% intact.
+
+### 💬 5. Graceful In-Chat Quota Guidance
+If all configured keys in your pool exhaust their daily limit, VoidGravity streams an informative markdown card straight into your chat response instead of abruptly throwing HTTP 429/502 errors or causing `Agent execution terminated due to error`.
+
+---
+
+## 🎨 Core Platform Features (Inherited from BetterGravity)
 
 BetterGravity is both an extensible modification platform and a curated suite of power-user capabilities built directly into Antigravity.
 

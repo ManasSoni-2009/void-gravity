@@ -142,6 +142,50 @@ back is redacted before it is written, so a Google error message that repeats a
 key cannot put one on your disk. The file rotates at 2 MB, keeping one previous
 generation.
 
+## VoidGravity Multi-Key Pool & Gemini 4 BYOK
+
+VoidGravity extends the BYOK plugin with automated fallback rotation, TPM burst stabilization, and native Gemini 4 support.
+
+### 🔑 Multi-Key Fallback Pool (`keys.json`)
+
+To use multiple Google AI Studio API keys, save them in:
+`%APPDATA%\BetterGravity\gemini\keys.json`
+
+```json
+{
+  "keys": [
+    "AIzaSyYourFirstApiKey...",
+    "AIzaSyYourSecondApiKey...",
+    "AIzaSyYourThirdApiKey..."
+  ]
+}
+```
+
+Or paste multiple keys separated by commas or newlines directly in the plugin settings under **Gemini API key**.
+
+#### How rotation works:
+- **Daily Quota (`requests_per_day` / `RESOURCE_EXHAUSTED` / `429` with delay > 120s)**:
+  VoidGravity marks the exhausted key, switches automatically to the next available key in the pool, and prepends a notification banner to the model response in chat:
+  `> ℹ️ Switched from Key #1 to fallback Key #2 (daily quota limit reached on Key #1)`
+- **Invalid / Expired Keys (`400` / `403` `API_KEY_INVALID`)**:
+  VoidGravity logs the invalid key, rotates to the next key, and warns you in the chat.
+- **TPM Burst Rate Limits (`429` with delay <= 120s)**:
+  VoidGravity **does not switch keys** during short per-minute burst limits (such as 250k tokens/min on Free Tier). Switching keys mid-turn causes severe context drift and tool hallucinations. Instead, VoidGravity holds the connection, pauses for the exact cooldown (~15–25s), and resumes on the **same key**, keeping all reasoning and conversation context intact.
+- **All Keys Exhausted**:
+  If every key in your pool has exhausted its daily quota, VoidGravity streams a formatted guide directly into the chat pane explaining how to add another key or switch to **Gemini 3.8 Flash** on the bundled subscription, avoiding language server crashes.
+
+### 🤖 Gemini 4 Model Selection
+
+VoidGravity automatically unlocks and registers the Gemini 4 family in Antigravity's model selector:
+- `gemini-4-argon` -> `gemini-4-argon`
+- `gemini-4-hydrogen` -> `gemini-4-hydrogen`
+- `gemini-4-neon` -> `gemini-4-neon`
+- `gemini-4-carbon` -> `gemini-4-carbon`
+
+Standard models (`Gemini 3.8 Flash`, `3.5 Flash Lite`, `Gemini 2.5 Pro`, `Claude Sonnet 4.6`) pass straight through to Antigravity's bundled subscription without proxy overhead.
+
+---
+
 ## When something is wrong
 
 *The certificate can only be installed on Windows* — the translator itself is
