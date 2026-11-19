@@ -1,7 +1,7 @@
 {
   "name": "Custom Gemini API Key",
   "description": "Sends Antigravity's chat through your own Google AI Studio keys for Gemini 4 models, featuring automatic multi-key failover and quota management.",
-  "version": "3.1.1",
+  "version": "3.2.0",
   "author": "VoidGravity",
   "main": "index.js",
   "gemini": true,
