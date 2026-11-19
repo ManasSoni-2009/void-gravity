@@ -1,3 +1,45 @@
+
+import fs from "node:fs";
+
+export function loadAllApiKeys(currentSettingKey?: string): string[] {
+  const keys: string[] = [];
+  function addKey(k?: string | null) {
+    if (typeof k === "string") {
+      for (const item of k.split(/[\r\n,;]+/)) {
+        const s = item.trim();
+        if ((s.startsWith("AIzaSy") || s.length > 20) && !keys.includes(s)) keys.push(s);
+      }
+    }
+  }
+  addKey(currentSettingKey);
+  try {
+    const keysFile = "C:\\Users\\manas\\AppData\\Roaming\\BetterGravity\\gemini\\keys.json";
+    if (fs.existsSync(keysFile)) {
+      const data = JSON.parse(fs.readFileSync(keysFile, "utf8"));
+      if (Array.isArray(data.keys)) data.keys.forEach(addKey);
+      else if (Array.isArray(data)) data.forEach(addKey);
+    }
+  } catch {}
+  return keys;
+}
+
+export function sendChatNotice(res: ServerResponse, message: string, traceId: string): void {
+  const resp = {
+    candidates: [{
+      content: { role: "model", parts: [{ text: message }] },
+      finishReason: "STOP"
+    }],
+    usageMetadata: { promptTokenCount: 0, candidatesTokenCount: 0, totalTokenCount: 0 },
+    modelVersion: "gemini-4"
+  };
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    "x-content-type-options": "nosniff"
+  });
+  res.end(`data: ${JSON.stringify({ response: resp, traceId, metadata: {} })}\n\n`);
+}
+
 /**
  * The loopback endpoint Antigravity's language server is pointed at.
  *
@@ -37,6 +79,7 @@ import {
   CCPA_HOST,
   CHAT_PATH_PREFIX,
   GOOGLE_BASE,
+  MODEL_VERSION,
   applyThinkingConfig,
   consolidate,
   filterHeaders,
@@ -213,6 +256,7 @@ function aim(base: BaseTarget, method: string, path: string, headers: OutgoingHt
 }
 
 export class GeminiProxy {
+  private activeKeyIndex = 0;
   private server: https.Server | undefined;
   private bound = 0;
   private translated = 0;
@@ -469,70 +513,175 @@ export class GeminiProxy {
     const payload = Buffer.from(JSON.stringify(read.inner), "utf8");
     const mode: AuditMode = settings.stream ? "stream" : "buffered";
     const started = Date.now();
+    const traceId = newTraceId();
 
-    let upstream: Upstream;
-    try {
-      upstream = await send(
-        aim(
-          settings.base,
-          "POST",
-          `/v1beta/models/${encodeURIComponent(resolution.model)}:streamGenerateContent?alt=sse`,
-          {
-            "content-type": "application/json",
-            "content-length": String(payload.byteLength),
-            "x-goog-api-key": settings.apiKey,
-            "user-agent": USER_AGENT,
-            "accept-encoding": "identity"
-          }
-        ),
-        payload,
-        UPSTREAM_TIMEOUT_MS,
-        settings.base.secure
-      );
-    } catch (cause) {
-      this.failed += 1;
-      this.note(mode, read.sourceEnum, resolution, settings, 0, started, cause);
-      logger.error(`gemini: ${resolution.model} could not be reached: ${why(cause)}`);
-      fail(response, 502, "The Gemini API could not be reached.");
+    const allKeys = loadAllApiKeys(settings.apiKey);
+    if (!allKeys.length) {
+      await this.passthrough(request, response, body);
       return;
     }
-    this.note(mode, read.sourceEnum, resolution, settings, upstream.status, started, undefined);
 
-    if (upstream.status !== 200) {
-      const message = decode(await collect(upstream.stream), headerText(upstream.headers, "content-encoding"));
+    if (this.activeKeyIndex === undefined || this.activeKeyIndex >= allKeys.length) {
+      this.activeKeyIndex = 0;
+    }
+
+    let attempts = 0;
+    const maxAttempts = Math.max(allKeys.length * 2, 4);
+    let upstream: Upstream | null = null;
+    let lastErrBody: Buffer | null = null;
+    let prefixNotice: string | null = null;
+    const exhaustedKeys = new Set<string>();
+
+    while (attempts < maxAttempts) {
+      attempts++;
+      const currentKey = allKeys[this.activeKeyIndex % allKeys.length];
+      const keyNum = (this.activeKeyIndex % allKeys.length) + 1;
+
+      try {
+        upstream = await send(
+          aim(
+            settings.base,
+            "POST",
+            `/v1beta/models/${encodeURIComponent(resolution.model)}:streamGenerateContent?alt=sse`,
+            {
+              "content-type": "application/json",
+              "content-length": String(payload.byteLength),
+              "x-goog-api-key": currentKey,
+              "user-agent": USER_AGENT,
+              "accept-encoding": "identity"
+            }
+          ),
+          payload,
+          UPSTREAM_TIMEOUT_MS,
+          settings.base.secure
+        );
+      } catch (cause) {
+        if (attempts < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        this.failed += 1;
+        this.note(mode, read.sourceEnum, resolution, settings, 0, started, cause);
+        logger.error(`gemini: ${resolution.model} could not be reached: ${why(cause)}`);
+        fail(response, 502, "The Gemini API could not be reached.");
+        return;
+      }
+
+      if (upstream.status === 200) {
+        break;
+      }
+
+      const errBody = decode(await collect(upstream.stream), headerText(upstream.headers, "content-encoding"));
       upstream.done();
+      lastErrBody = errBody;
+      const errStr = errBody.toString("utf8");
+      const errLower = errStr.toLowerCase();
+
+      if (upstream.status === 503) {
+        logger.info(`gemini: ${resolution.model} returned 503 on Key #${keyNum}`);
+        if (allKeys.length > 1 && attempts < maxAttempts) {
+          this.activeKeyIndex = (this.activeKeyIndex + 1) % allKeys.length;
+          logger.info(`gemini: Retrying with next key #${(this.activeKeyIndex % allKeys.length) + 1}...`);
+          continue;
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
+      }
+
+      if ((upstream.status === 400 || upstream.status === 403) && (errLower.includes("api_key_invalid") || errLower.includes("key not valid"))) {
+        logger.error(`gemini: Key #${keyNum} is invalid or expired.`);
+        exhaustedKeys.add(currentKey);
+        if (exhaustedKeys.size < allKeys.length) {
+          this.activeKeyIndex = (this.activeKeyIndex + 1) % allKeys.length;
+          const nextNum = (this.activeKeyIndex % allKeys.length) + 1;
+          prefixNotice = `> ⚠️ *Key #${keyNum} is invalid. Switched to fallback Key #${nextNum}.*\n\n`;
+          continue;
+        }
+        break;
+      }
+
+      if (upstream.status === 429) {
+        const isDaily =
+          errLower.includes("requests_per_day") ||
+          errLower.includes("requests per day") ||
+          errLower.includes("daily_limit") ||
+          errLower.includes("limit: 100") ||
+          errLower.includes("limit: 50");
+        const match = errStr.match(/retry in ([0-9.]+)s/i) || errStr.match(/"retryDelay":\s*"([0-9.]+)"s/i);
+        const delaySec = match ? parseFloat(match[1]) : isDaily ? 86400 : 22;
+
+        if (isDaily || delaySec > 120) {
+          logger.info(`gemini: Key #${keyNum} reached daily quota limit.`);
+          exhaustedKeys.add(currentKey);
+          if (exhaustedKeys.size < allKeys.length) {
+            this.activeKeyIndex = (this.activeKeyIndex + 1) % allKeys.length;
+            const nextNum = (this.activeKeyIndex % allKeys.length) + 1;
+            prefixNotice = `> ℹ️ *Switched from Key #${keyNum} to fallback Key #${nextNum} (daily quota limit reached on Key #${keyNum})*\n\n`;
+            logger.info(`gemini: Switched to fallback Key #${nextNum}.`);
+            continue;
+          }
+          break;
+        } else {
+          const waitMs = Math.min(Math.ceil(delaySec * 1000) + 1500, 35000);
+          logger.info(`gemini: 429 TPM burst rate limit on Key #${keyNum}, waiting ${waitMs}ms before retry ${attempts}/${maxAttempts} on same key...`);
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+      }
+
+      break;
+    }
+
+    if (!upstream || upstream.status !== 200) {
       this.failed += 1;
-      // Whatever Google said, said to the editor: a rejected key or a spent
-      // quota is the user's to fix, and a 502 would tell them nothing.
-      logger.info(`gemini: ${resolution.model} answered ${upstream.status}`);
-      response.writeHead(upstream.status, {
-        "content-type": headerText(upstream.headers, "content-type") ?? "application/json"
-      });
-      response.end(message);
+      this.note(mode, read.sourceEnum, resolution, settings, upstream ? upstream.status : 0, started, undefined);
+      if (exhaustedKeys.size >= allKeys.length) {
+        const promptMsg =
+          `⚠️ **Daily Quota Limit Reached on All Configured API Keys (${allKeys.length} key${allKeys.length > 1 ? "s" : ""})**\n\n` +
+          `All your configured Google AI Studio keys have exhausted their free-tier quota.\n\n` +
+          `**To continue immediately:**\n` +
+          `1. **Add another API key**: Add a new key from another Google account into \`keys.json\`:\n` +
+          `   \`C:\\Users\\manas\\AppData\\Roaming\\BetterGravity\\gemini\\keys.json\`\n` +
+          `2. **Switch to Default Subscription**: Select **Gemini 3.8 Flash** in the model dropdown to continue working with Antigravity's built-in subscription (unlimited prompts, multi-million TPM, no quota limits).\n`;
+        sendChatNotice(response, promptMsg, traceId);
+        return;
+      }
+      const errPayload = lastErrBody ?? Buffer.from("The model could not be reached.", "utf8");
+      logger.info(`gemini: ${resolution.model} answered ${upstream ? upstream.status : "unknown"}`);
+      response.writeHead(upstream ? upstream.status : 502, { "content-type": "application/json" });
+      response.end(errPayload);
       return;
     }
 
     this.translated += 1;
-    const traceId = newTraceId();
-    if (settings.stream) await this.streamOut(upstream, response, traceId, settings.thoughts);
-    else await this.bufferOut(upstream, response, traceId, settings.thoughts);
+    this.note(mode, read.sourceEnum, resolution, settings, upstream.status, started, undefined);
+    if (settings.stream) {
+      await this.streamOut(upstream, response, traceId, settings.thoughts, prefixNotice);
+    } else {
+      await this.bufferOut(upstream, response, traceId, settings.thoughts, prefixNotice);
+    }
   }
 
-  /**
-   * Each event re-wrapped and flushed as it arrives, which is what makes the
-   * answer appear a token at a time instead of all at once.
-   */
   private async streamOut(
     upstream: Upstream,
     response: ServerResponse,
     traceId: string,
-    thoughts: boolean
+    thoughts: boolean,
+    notice?: string | null
   ): Promise<void> {
     response.writeHead(200, {
       "content-type": "text/event-stream",
       "cache-control": "no-cache",
       "x-content-type-options": "nosniff"
     });
+
+    if (notice) {
+      const noticeObj = {
+        candidates: [{ content: { role: "model", parts: [{ text: notice }] } }],
+        modelVersion: MODEL_VERSION
+      };
+      await write(response, `data: ${JSON.stringify({ response: noticeObj, traceId, metadata: {} })}\n\n`);
+    }
     let rest: Buffer = Buffer.alloc(0);
     try {
       for await (const chunk of upstream.stream) {
@@ -559,7 +708,8 @@ export class GeminiProxy {
     upstream: Upstream,
     response: ServerResponse,
     traceId: string,
-    thoughts: boolean
+    thoughts: boolean,
+    notice?: string | null
   ): Promise<void> {
     let raw: Buffer = Buffer.alloc(0);
     try {
@@ -569,6 +719,17 @@ export class GeminiProxy {
     }
     const payloads = splitEvents(raw).events.flatMap((event) => [...readEventData(event)]);
     const answer = consolidate(payloads, traceId, thoughts);
+    if (notice) {
+      answer.body =
+        `data: ${JSON.stringify({
+          response: {
+            candidates: [{ content: { role: "model", parts: [{ text: notice }] } }],
+            modelVersion: MODEL_VERSION
+          },
+          traceId,
+          metadata: {}
+        })}\n\n` + answer.body;
+    }
     logger.info(
       `gemini: ${answer.textLength} characters, ${answer.thoughtLength} of thinking, ${answer.actionCount} tool call(s)`
     );
